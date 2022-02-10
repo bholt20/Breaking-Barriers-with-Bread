@@ -1,0 +1,160 @@
+# Bioinformatics
+
+# This will be our pipeline for trimming samples, assigning taxa, and creating an 'OTU' table. Other popular pipelines are qiime2 and mothur, but I prefer this one because 1) its simple and very user friendly 2) the visuals produces are informative and easily produced 3) It's not black-boxy in the sense that its highly customizable and can easily be manipulated at every step to make sure you are in control of your data.
+
+# This script is my modifications to the DADA2 Tutorial found at https://benjjneb.github.io/dada2/tutorial.html. You are encouraged to check out information and other modifications from the website and associated publications.
+
+
+# It's easier to work from a directory instead of doing the path step they did. It also keeps all your output files in one place. Of course, change it to where your sequences are. Also, its important that files are in the right directory before loading them in.
+# alternatively, click 'Session' -> 'Set Working Directory' -> 'Choose Directory' 
+setwd('/Users/benjaminholt/Desktop/Sourdough/seq_prime_rm/sub')
+list.files()
+
+# Intro into R ###
+# To run code, from here, either 1) highlight and hit ctrl+enter or at the end of the line hit ctrl+enter.'Command' + return also works.
+
+# the <- assigns things to objects and saves them in the work space (Global environment)
+2+2
+four<-2+2
+print(four)
+
+install.packages('dadjoke')
+library(dadjoke)
+dadjoke()
+# if you are unsure what a function does, simply put a question mark
+?boxplot()
+
+# Install the DADA2 package following the instructions on the website and then follow this to go through the bioinformatics. Or just run this code below
+
+install.packages("devtools")
+library("devtools")
+devtools::install_github("benjjneb/dada2", ref="v1.16")
+library(dada2); packageVersion("dada2")
+
+list.files() # this should show your samples in order
+
+# Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq and SAMPLENAME_R2_001.fastq
+fnFs <- sort(list.files(pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(pattern="_R2_001.fastq", full.names = TRUE))
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+mysamp<-c(1,4,6)
+plotQualityProfile(fnFs[mysamp]) # This is telling it to plot the first 10 quality profile for forward reads. 
+## save this plot by clicking on the 'Export' button, save as a pdf and make sure you denote this is forward reads 
+plotQualityProfile(fnRs[5:7]) # reverse read quality scores will always tank towards the end. This will be addressed later, but we can determine a good trimming threshold. 
+# we sequenced at 275 PE. For the highest quality, lets trim the reverse reads to 225 and the forward reads to 250
+# save this plot in the same manner as above, making sure you denote reverse reads
+
+filtFs <- file.path("filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path("filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+## Now we are set to trim. We will use the maxEE score as opposed to the traditional q quality filtering. maxEE is generally a better metric, but sometimes you can lose ALOT of reads if the threshold is set to low. This will take some time. Start with c(2,2) and assess reads lost. If too many are lost, try c(2,3) or c(3,3). Loosening the maxEE will push more reads through, but this might be detrimental to our results and confidence in quality of our merged reads.
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(260,250),
+                     maxN=0, maxEE=c(3,3), truncQ=2, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE) # On Windows set multithread=FALSE
+
+out2<-as.data.frame(out)
+out2$lost<-out2$reads.in-out2$reads.out
+summary(out2$lost) 
+# save this
+write.csv(out2, file='readsqualityfiltering.csv')
+
+# now we will learn the error rates
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+plotErrors(errF, nominalQ=TRUE) # these look pretty good and normal
+plotErrors(errR, nominalQ=TRUE)
+
+# If errors dramatically deviate from the expected rates, we might need to set a tighter maxEE. If the deviation is minimal, we can still press on because dada() uses our learned errors and not the expected rates.
+
+# lets remove these errors
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+
+
+## Merging. How much overlap should we have?
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+head(mergers[[1]])
+
+# now to make a table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab) # how many samples and how many 'species'
+
+# looking at the lengths of merged sequences. This is informative as to how the sequence looks
+table(nchar(getSequences(seqtab)))# most of these look good
+plot(table(nchar(getSequences(seqtab))))
+
+## Removing chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab) 
+dim(seqtab.nochim) 
+sum(seqtab.nochim)/sum(seqtab) # this is interesting. We lost A TON of reads, but not much contribution to relative abundance
+
+
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+track
+write.csv(track, file = 'reads_bioinfo.csv') # save this to have later
+
+saveRDS(seqtab.nochim, file = 'seqtab_nc.RDS')
+
+## The IDTaxa method is much faster and generally has worked better in my experience. I will be using that here. The other method has crashed  my computer multiple times and has ran for 10+ hours. Download the classifier from here http://www2.decipher.codes/Downloads.html and move it to your working directory
+if (!requireNamespace("BiocManager", quietly=TRUE))
+  install.packages("BiocManager")
+BiocManager::install("DECIPHER")
+library(DECIPHER)
+dna <- DNAStringSet(getSequences(seqtab.nochim)) # Create a DNAStringSet from the ASVs
+load("SILVA_SSU_r138_2019.RData") # CHANGE TO THE PATH OF YOUR TRAINING SET
+ids <- IdTaxa(dna, trainingSet, strand="top", processors=NULL, verbose=FALSE) # use all processors
+ranks <- c("domain", "phylum", "class", "order", "family", "genus", "species") # ranks of interest
+# Convert the output object of class "Taxa" to a matrix analogous to the output from assignTaxonomy
+taxid <- t(sapply(ids, function(x) {
+  m <- match(ranks, x$rank)
+  taxa <- x$taxon[m]
+  taxa[startsWith(taxa, "unclassified_")] <- NA
+  taxa
+}))
+colnames(taxid) <- ranks; rownames(taxid) <- getSequences(seqtab.nochim)
+
+### Now we will add the metadata and make a phyloseq package. This keeps everything together and organized. 
+source('http://bioconductor.org/biocLite.R')
+biocLite('phyloseq')
+library(phyloseq)
+
+samdf<-read.csv(file.choose()) ## this is your metadata file
+
+
+rownames(samdf)<-samdf$Samp
+samdf$match<-rownames(otu_table(ps, taxa_are_rows = F))
+setequal(samdf$match, rownames(samdf)) ## make sure this is true!
+
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxid))
+ps<-readRDS(file.choose())
+sample_data(ps)<-samdf
+
+rownames(otu_table(ps, taxa_are_rows = F))
+## we want to clean it up to speed up things down the road. This is a pretty easy and nice way to do it...
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+taxtab<-tax_table(ps)
+write.csv(taxtab, file='tax_tab.csv')
+# suppose we want to add a column onto the metadata
+sample_data(ps)$libsize<-rowSums(seqtab.nochim)
+
+
+## save the phyloseq object 
+saveRDS(ps, file = 'ps_sourdough.RDS')
+# if you want to save everything weve done thus far, run the code below. This will save everything, but its a pretty large file. If you are working on a big project, I recommend this so you don't have to go back and redo everything if you want to change something in the pipeline.
+save.image(file = 'Sourdough.RData')
+
+# this concludes the bioinformatics. Next time, we will remove unwanted samples, taxa, and look at our zymo controls.
+
