@@ -7,7 +7,7 @@
 
 # It's easier to work from a directory instead of doing the path step they did. It also keeps all your output files in one place. Of course, change it to where your sequences are. Also, its important that files are in the right directory before loading them in.
 # alternatively, click 'Session' -> 'Set Working Directory' -> 'Choose Directory' 
-setwd('/Users/benjaminholt/Desktop/Sourdough/seq_prime_rm/sub')
+setwd('/change/to/your/sequences')
 list.files()
 
 # Intro into R ###
@@ -18,8 +18,8 @@ list.files()
 four<-2+2
 print(four)
 
-install.packages('dadjoke')
-library(dadjoke)
+install.packages('dadjoke') ## packages are where functions are stored. Functions act on objects to 'do things'.
+library(dadjoke) # the library command pulls an installed package into our working environment.
 dadjoke()
 # if you are unsure what a function does, simply put a question mark
 ?boxplot()
