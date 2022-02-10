@@ -1,0 +1,110 @@
+# Removing Primers using Cutadapt
+# this should be executed from Command Line/Terminal
+
+# Typically, I use cutadapt to remove primers. This is run from miniconda and can be a little finicky for different computers. But we can do it!
+
+# First things first, you should ALWAYS back up your sequences before you doing anything. I usually put them on an external harddrive/flashdrive and keep in somewhere safe. The sequencing core saves runs for a year or so, but its always better to have your own copy of all the sequences in case you need it later.
+
+
+# Now we need to do a little work in terminal to get everything organized so it flows more smoothly. All the # signs below are my annotation, all the code in between can be run from terminal.
+
+# open up a terminal window
+# navigate to where your sequences are downloaded with
+cd 'your folder' #change to yours
+cd 'your folder' #change to yours
+ls #this lists all the files in the folder
+
+
+# navigate to where one folder above all the sequences and run the next three lines. This removes all the sequences from the sub folders. The fastq files contains the information we need to differentiate: 
+
+
+mkdir all_together
+find . -mindepth 2 -type f -print -exec mv {} . \;
+mv -f *.fastq.gz all_together
+ls 
+#this should only have two folders
+cd all_together
+ls 
+#we should now see all our fastq.gz files in here.
+
+#Now for simplicities sake, we should split up the 16S and ITS sequences. To do this, make a new folder and run these codes. Because ITS sequences are enumerated three different ways, we will have to do it thrice:
+
+mkdir ITS
+mv *ITS-* ITS
+mv *ITS_* ITS
+mv *ITSb* ITS
+
+# let's now do the same for the 16S. Since all we have in here now is 16S, its a little easier.
+mkdir 16S
+mv *fastq.gz 16S
+
+
+# installing cutadapt.
+# Make sure miniconda/Anaconda is installed. Follow this link to the download and the instructions to install https://docs.conda.io/en/latest/miniconda.html
+
+# Once installed, trying running this line to confirm
+conda update conda
+
+#Now to install cut adapt
+conda install -c bioconda cutadapt
+
+
+# install miniconda
+# source /'change to your path'/miniconda3/bin/activate
+# conda init zsh #you can potentially skip this depending on your computer
+# conda activate cutadaptenv #you should now see cut adapt has been activated
+
+# Now use the cd command to navigate back to where your sequences are stored.
+# make a new directory for our primer removed sequences:
+mkdir trimmed
+
+# I've never had much luck getting cut adapt to work on zipped sequences. It's probably a quick fix, I just haven't taken the time to sort it out. Unzip the sequences by running:
+
+gunzip *.fastq.gz
+
+
+#############################################
+#############################################
+#############################################
+
+# A little background on cutadapt. Cutadapt removes both the forward/reverse primers as well as the complements from our sequences, thus we need to specify both.
+
+# We want to trim forward and RC_r off R1, and Reverse and RC_F
+# R1: -g fwd, -a rc.r
+# R2: -G Rev, -A rc.F
+
+# 5’ primer is g, 3’ is a
+
+#   Forward          				Complement
+# 5’ ”CCTACGGGNGGCWGCAG" 3’  "CTGCWGCCNCCCGTAGG" = 17 bases
+            Reverse          		   RevComp
+# 5’ ”GACTACHVGGGTATCTAATCC" 3’  "GGATTAGATACCCBDGTAGTC" =21 bases
+
+
+for i in *_R1_001.fastq
+do
+  SAMPLE=$(echo ${i} | sed "s/_R1_\001\.fastq//")
+  echo ${SAMPLE}_R1_001.fastq ${SAMPLE}_R2_001.fastq
+cutadapt  -m 1 -q 10,10 -g CCTACGGGNGGCWGCAG -a GGATTAGATACCCBDGTAGTC -G GACTACHVGGGTATCTAATCC -A CTGCWGCCNCCCGTAGG -o trimmedEW/${SAMPLE}_R1_001.fastq -p trimmedEW/${SAMPLE}_R2_001.fastq ${SAMPLE}_R1_001.fastq ${SAMPLE}_R2_001.fastq
+done
+
+## this tells Cutadapt to sample each fastq file in the folder, R1 and then R2 and then remove primer combinations based of forward/reverse primers and also removes inverse primers if included
+
+# O is the minimum overlap between adapter and sequence
+# e is the expected error rate, 0.1 is default
+# q is the q-score threshold, it is set here to be conservative. we can trim more later.
+# m is the minimal read count— this has implications for Dada2 in R, here we can remove failed samples if desired
+
+
+# Watch as it removes the primers. Make sure a lot of reads are having primers removed. If they are not, your primer pairs might be put in incorrectly! Follow along while it is running to make sure everything is done properly.
+
+# Now we need to verify the primers were actually removed:
+
+head sample1_L001_R1_001.fastq # change this to yours
+# you should see CCTACGGGTGGCAG at the beginning. This is our primer. Now lets see if its been removed
+
+cd trimmed #moved into our folder with the primers removed sequences
+head sample1_L001_R1_001.fastq # look at the difference at the beginning.
+
+# the line now starts with TGGGGAATTTTCCG, so as a sanity check, it appears they have been removed!
+
